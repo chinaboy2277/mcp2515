@@ -300,7 +300,7 @@ void MCP2515::SendBuffer(byte buffers) {
   digitalWrite(_CS,HIGH);
 }
 
-void MCP2515::LoadBuffer(byte buffer, Frame message) {
+void MCP2515::LoadBuffer(byte buffer, Frame *message) {
  
   // buffer should be one of TXB0, TXB1 or TXB2
   if(buffer==TXB0) buffer = 0; //the values we need are 0, 2, 4 TXB1 and TXB2 are already 2 / 4
@@ -311,21 +311,21 @@ void MCP2515::LoadBuffer(byte buffer, Frame message) {
   byte byte4=0; // TXBnEID0
   byte byte5=0; // TXBnDLC
 
-  if(message.ide) {
-    byte1 = byte((message.id<<3)>>24); // 8 MSBits of SID
-	byte2 = byte((message.id<<11)>>24) & B11100000; // 3 LSBits of SID
-	byte2 = byte2 | byte((message.id<<14)>>30); // 2 MSBits of EID
+  if(message->ide) {
+    byte1 = byte((message->id<<3)>>24); // 8 MSBits of SID
+	byte2 = byte((message->id<<11)>>24) & B11100000; // 3 LSBits of SID
+	byte2 = byte2 | byte((message->id<<14)>>30); // 2 MSBits of EID
 	byte2 = byte2 | B00001000; // EXIDE
-    byte3 = byte((message.id<<16)>>24); // EID Bits 15-8
-    byte4 = byte((message.id<<24)>>24); // EID Bits 7-0
+    byte3 = byte((message->id<<16)>>24); // EID Bits 15-8
+    byte4 = byte((message->id<<24)>>24); // EID Bits 7-0
   } else {
-    byte1 = byte((message.id<<21)>>24); // 8 MSBits of SID
-	byte2 = byte((message.id<<29)>>24) & B11100000; // 3 LSBits of SID
+    byte1 = byte((message->id<<21)>>24); // 8 MSBits of SID
+	byte2 = byte((message->id<<29)>>24) & B11100000; // 3 LSBits of SID
     byte3 = 0; // TXBnEID8
     byte4 = 0; // TXBnEID0
   }
-  byte5 = message.dlc;
-  if(message.rtr) {
+  byte5 = message->dlc;
+  if(message->rtr) {
     byte5 = byte5 | B01000000;
   }
   
@@ -337,8 +337,8 @@ void MCP2515::LoadBuffer(byte buffer, Frame message) {
   SPI.transfer(byte4);
   SPI.transfer(byte5);
  
-  for(int i=0;i<message.dlc;i++) {
-    SPI.transfer(message.data[i]);
+  for(int i=0;i<message->dlc;i++) {
+    SPI.transfer(message->data[i]);
   }
   digitalWrite(_CS,HIGH);
 }
@@ -532,15 +532,15 @@ void MCP2515::EnqueueTX(Frame& newFrame) {
 		
 	if (status != 0b01010100) { //found an open slot
 		if ((status & 0b00000100) == 0) { //transmit buffer 0 is open
-			LoadBuffer(TXB0, newFrame);
+			LoadBuffer(TXB0, &newFrame);
 			SendBuffer(TXB0);
 		}
 		else if ((status & 0b00010000) == 0) { //transmit buffer 1 is open
-			LoadBuffer(TXB1, newFrame);
+			LoadBuffer(TXB1, &newFrame);
 			SendBuffer(TXB1);
 		}
 		else { // must have been buffer 2 then.
-			LoadBuffer(TXB2, newFrame);
+			LoadBuffer(TXB2, &newFrame);
 			SendBuffer(TXB2);
 		}
 	}
@@ -595,7 +595,7 @@ void MCP2515::intHandler(void) {
 		// TX buffer 0 sent
 	   digitalWrite(LED_CAN_TX, LOW);
        if (tx_frame_read_pos != tx_frame_write_pos) {
-			LoadBuffer(TXB0, tx_frames[tx_frame_read_pos]);
+			LoadBuffer(TXB0, (Frame *)&tx_frames[tx_frame_read_pos]);
 		   	SendBuffer(TXB0);
 			tx_frame_read_pos = (tx_frame_read_pos + 1) % 8;
 	   }
@@ -604,7 +604,7 @@ void MCP2515::intHandler(void) {
 		// TX buffer 1 sent
 	  digitalWrite(LED_CAN_TX, LOW);
 	  if (tx_frame_read_pos != tx_frame_write_pos) {
-		  LoadBuffer(TXB1, tx_frames[tx_frame_read_pos]);
+		  LoadBuffer(TXB1, (Frame *)&tx_frames[tx_frame_read_pos]);
 		  SendBuffer(TXB1);
 		  tx_frame_read_pos = (tx_frame_read_pos + 1) % 8;
 	  }
@@ -613,7 +613,7 @@ void MCP2515::intHandler(void) {
 		// TX buffer 2 sent
 		digitalWrite(LED_CAN_TX, LOW);
 		if (tx_frame_read_pos != tx_frame_write_pos) {
-			LoadBuffer(TXB2, tx_frames[tx_frame_read_pos]);
+			LoadBuffer(TXB2, (Frame *)&tx_frames[tx_frame_read_pos]);
 			SendBuffer(TXB2);
 			tx_frame_read_pos = (tx_frame_read_pos + 1) % 8;
 		}
@@ -637,4 +637,95 @@ void MCP2515::intHandler(void) {
     }
 	
     digitalWrite(LED_CAN_RX, LOW);
+}
+
+int MCP2515::watchFor()
+{
+	SetRXMask(MASK0, 0, true);
+	SetRXMask(MASK1, 0, false);
+	SetRXFilter(FILTER0, 0, true);
+	SetRXFilter(FILTER2, 0, false);
+	return 0;
+}
+
+int MCP2515::watchFor(uint32_t id)
+{
+	if (id > 0x7FF) SetRXFilter(id, 0x1FFFFFFF, true);
+	else SetRXFilter(id, 0x7FF, false);
+	return 0;
+}
+
+int MCP2515::watchFor(uint32_t id, uint32_t mask)
+{
+	if (id > 0x7FF) SetRXFilter(id, mask, true);
+	else SetRXFilter(id, mask, false);
+	return 0;
+}
+
+int MCP2515::watchForRange(uint32_t id1, uint32_t id2)
+{
+	uint32_t id = 0;
+	uint32_t mask = 0;
+	uint32_t temp;
+
+	if (id1 > id2) 
+	{   //looks funny I know. In place swap with no temporary storage. Neato!
+		id1 = id1 ^ id2;
+		id2 = id1 ^ id2; //note difference here.
+		id1 = id1 ^ id2;
+	}
+
+	id = id1;
+
+	if (id2 <= 0x7FF) mask = 0x7FF;
+	else mask = 0x1FFFFFFF;
+
+	/* Here is a quick overview of the theory behind these calculations.
+	   We start with mask set to 11 or 29 set bits (all 1's)
+	   and id set to the lowest ID in the range.
+	   From there we go through every single ID possible in the range. For each ID
+	   we AND with the current ID. At the end only bits that never changed and were 1's
+	   will still be 1's. This yields the ID we can match against to let these frames through
+	   The mask is calculated by finding the bitfield difference between the lowest ID and
+	   the current ID. This calculation will be 1 anywhere the bits were different. We invert
+	   this so that it is 1 anywhere the bits where the same. Then we AND with the current Mask.
+	   At the end the mask will be 1 anywhere the bits never changed. This is the perfect mask.
+	*/
+	for (int c = id1; c <= id2; c++)
+	{
+		id &= c;
+		temp = (~(id1 ^ c)) & 0x1FFFFFFF;
+		mask &= temp;
+	}
+	//output of the above crazy loop is actually the end result.
+	if (id > 0x7FF) SetRXFilter(id, mask, true);
+	else SetRXFilter(id, mask, false);
+	return 0;
+
+}
+/*
+void MCP2515::attachCANInterrupt(void (*cb)(CAN_FRAME *))
+{
+	cbCANFrame[6] = cb;
+}
+
+void MCP2515::attachCANInterrupt(uint8_t filter, void (*cb)(CAN_FRAME *))
+{
+	if ((filter < 0) || (filter > 5)) return;
+	cbCANFrame[filter] = cb;
+}
+
+void MCP2515::detachCANInterrupt(uint8_t filter)
+{
+	if ((filter < 0) || (filter > 5)) return;
+	cbCANFrame[filter] = 0;
+}
+*/
+int MCP2515::available()
+{
+	int val;
+	val = rx_frame_read_pos - rx_frame_write_pos;
+	//Now, because this is a cyclic buffer it is possible that the ordering was reversed
+	//So, handle that case
+	if (val < 0) val += 8;
 }
